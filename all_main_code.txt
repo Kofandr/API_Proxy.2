@@ -3,10 +3,12 @@ package logger
 
 import (
 	"context"
-	"github.com/Kofandr/API_Proxy.2/internal/middleware"
 	"log/slog"
 	"os"
 )
+
+type CtxLoggerKey struct {
+}
 
 func New(level string) *slog.Logger {
 	otps := &slog.HandlerOptions{}
@@ -27,7 +29,7 @@ func New(level string) *slog.Logger {
 }
 
 func MustLoggerFromCtx(ctx context.Context) *slog.Logger {
-	if logger, ok := ctx.Value(middleware.CtxLoggerKey{}).(*slog.Logger); ok {
+	if logger, ok := ctx.Value(CtxLoggerKey{}).(*slog.Logger); ok {
 		return logger
 	}
 	return slog.Default()
@@ -146,6 +148,7 @@ func New(client *resty.Client, cfg *config.Configuration) *Handler {
 
 func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	logger := logger.MustLoggerFromCtx(r.Context())
+	w.WriteHeader(http.StatusOK)
 
 	if r.Method != http.MethodGet {
 		logger.Info("Invalid method", "method", r.Method)
@@ -174,7 +177,7 @@ func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := w.Write(resp.Body()); err != nil {
 		logger.Error("Failed to write response", "error", err)
-		http.Error(w, "Failed to proxy response", http.StatusInternalServerError)
+		return
 	}
 
 }
@@ -235,24 +238,22 @@ package middleware
 
 import (
 	"context"
+	"github.com/Kofandr/API_Proxy.2/internal/logger"
 	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
 	"time"
 )
 
-type CtxLoggerKey struct {
-}
-
-func LoggerMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
+func LoggerMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		requestID := uuid.New().String()
 
-		requestLogger := logger.With("requestID", requestID)
+		requestLogger := log.With("requestID", requestID)
 
 		ctx := context.WithValue(r.Context(), "requestID", requestID)
-		ctx = context.WithValue(ctx, CtxLoggerKey{}, requestLogger)
+		ctx = context.WithValue(ctx, logger.CtxLoggerKey{}, requestLogger)
 		r = r.WithContext(ctx)
 
 		requestLogger.Info("Request started",
@@ -300,6 +301,7 @@ func NewRestyClient() *resty.Client {
 
 	client.
 		SetRetryCount(3).
+		SetTimeout(5 * time.Second).
 		SetRetryWaitTime(2 * time.Second).
 		SetRetryMaxWaitTime(10 * time.Second)
 
@@ -327,9 +329,9 @@ import (
 )
 
 type Configuration struct {
-	Port        int    `yaml:"port" env:"PORT"`
-	PathProxy   string `yaml:"pathProxy" env:"PATH_PROXY" envdefault:"https://jsonplaceholder.typicode.com/posts/"`
-	LoggerLevel string `yaml:"loggerLevel" env:"LOGGER_LEVEL"`
+	Port        int
+	PathProxy   string
+	LoggerLevel string
 }
 
 func Load(path string) (*Configuration, error) {
@@ -384,6 +386,9 @@ func (cfg *Configuration) Validate() error {
 	}
 	if cfg.PathProxy == "" {
 		return errors.New("proxy path is required")
+	}
+	if cfg.LoggerLevel != "INFO" && cfg.LoggerLevel != "DEBUG" && cfg.LoggerLevel != "WARN" && cfg.LoggerLevel != "ERROR" {
+		return errors.New("Invalid Level")
 	}
 	return nil
 }

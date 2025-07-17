@@ -22,7 +22,6 @@ func New(client *resty.Client, cfg *config.Configuration) *Handler {
 
 func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	logger := logger.MustLoggerFromCtx(r.Context())
-	w.WriteHeader(http.StatusOK)
 
 	if r.Method != http.MethodGet {
 		logger.Info("Invalid method", "method", r.Method)

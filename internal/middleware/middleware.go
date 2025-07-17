@@ -25,7 +25,7 @@ func LoggerMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 			"path", r.URL.Path,
 		)
 
-		rw := &responseWriter{ResponseWriter: w}
+		rw := newResponseWriter(w)
 
 		start := time.Now()
 		next.ServeHTTP(rw, r)
@@ -39,7 +39,6 @@ func LoggerMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// responseWriter для перехвата статус-кода ответа
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -48,4 +47,11 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func newResponseWriter(w http.ResponseWriter) *responseWriter {
+	return &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK,
+	}
 }
