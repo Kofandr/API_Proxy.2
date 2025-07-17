@@ -3,10 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"os"
 	"strconv"
-
-	"gopkg.in/yaml.v3" // Импорт YAML пакета
 )
 
 type Configuration struct {
