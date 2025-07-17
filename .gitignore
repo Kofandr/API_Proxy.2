@@ -1,0 +1,30 @@
+# Бинарные файлы
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+
+
+bin/
+build/
+dist/
+
+*.log
+/temp/
+
+.DS_Store
+Thumbs.db
+
+
+.idea/        # JetBrains IDE
+.vscode/      # VS Code
+
+
+.env
+.yaml
+
+docs/docs.go
