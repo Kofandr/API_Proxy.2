@@ -1,0 +1,445 @@
+==================== ./internal/logger/logger.go ====================
+package logger
+
+import (
+	"context"
+	"github.com/Kofandr/API_Proxy.2/internal/middleware"
+	"log/slog"
+	"os"
+)
+
+func New(level string) *slog.Logger {
+	otps := &slog.HandlerOptions{}
+
+	switch level {
+	case "DEBUG":
+		otps.Level = slog.LevelDebug
+	case "WARN":
+		otps.Level = slog.LevelWarn
+	case "ERROR":
+		otps.Level = slog.LevelError
+	default:
+		otps.Level = slog.LevelInfo
+	}
+
+	return slog.New(slog.NewJSONHandler(os.Stdout, otps))
+
+}
+
+func MustLoggerFromCtx(ctx context.Context) *slog.Logger {
+	if logger, ok := ctx.Value(middleware.CtxLoggerKey{}).(*slog.Logger); ok {
+		return logger
+	}
+	return slog.Default()
+}
+==================== ./internal/handler/handler_test.go ====================
+package handler
+
+import (
+	"github.com/stretchr/testify/assert"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-resty/resty/v2"
+)
+
+func TestHandler_Get_Simple(t *testing.T) {
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		expectedStatus int
+		expectedBody   string
+		serverResponse func(w http.ResponseWriter, r *http.Request)
+	}{
+		{
+			name:           "successful GET request",
+			method:         http.MethodGet,
+			path:           "/posts/1",
+			expectedStatus: http.StatusOK,
+			expectedBody:   "Hello from server",
+			serverResponse: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("Hello from server"))
+			},
+		},
+		{
+			name:           "invalid HTTP method",
+			method:         http.MethodPost,
+			path:           "/posts/1",
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Invalid method\n",
+			serverResponse: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("Hello from server"))
+			},
+		},
+		{
+			name:           "non-existent ID returns 404",
+			method:         http.MethodGet,
+			path:           "/posts/999",
+			expectedStatus: http.StatusNotFound,
+			expectedBody:   "Not found",
+			serverResponse: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/999" {
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte("Not found"))
+				} else {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte("Hello from server"))
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+
+			testServer := httptest.NewServer(http.HandlerFunc(test.serverResponse))
+			defer testServer.Close()
+
+			h := &Handler{
+				baseURL:     testServer.URL + "/",
+				restyClient: resty.New(),
+			}
+
+			req := httptest.NewRequest(test.method, test.path, nil)
+			w := httptest.NewRecorder()
+
+			h.Get(w, req)
+
+			res := w.Result()
+			defer res.Body.Close()
+
+			assert.Equal(t, test.expectedStatus, res.StatusCode)
+
+			if test.expectedBody != "" {
+				body := w.Body.String()
+				assert.Equal(t, test.expectedBody, body)
+			}
+		})
+	}
+}
+==================== ./internal/handler/handler.go ====================
+package handler
+
+import (
+	"github.com/Kofandr/API_Proxy.2/config"
+	"github.com/Kofandr/API_Proxy.2/internal/logger"
+	"github.com/go-resty/resty/v2"
+	"net/http"
+	"strings"
+)
+
+type Handler struct {
+	baseURL     string
+	restyClient *resty.Client
+}
+
+func New(client *resty.Client, cfg *config.Configuration) *Handler {
+	return &Handler{
+		baseURL:     cfg.PathProxy,
+		restyClient: client,
+	}
+}
+
+func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	logger := logger.MustLoggerFromCtx(r.Context())
+
+	if r.Method != http.MethodGet {
+		logger.Info("Invalid method", "method", r.Method)
+		http.Error(w, "Invalid method", http.StatusBadRequest)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/posts/")
+	resp, err := handler.restyClient.R().
+		SetHeader("Accept", "application/json").
+		SetContext(r.Context()).
+		Get(handler.baseURL + id)
+	if err != nil {
+		logger.Error("Upstream error", "url", (handler.baseURL + id), "method", r.Method, "error", err)
+		http.Error(w, "Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	for key, values := range resp.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode())
+
+	if _, err := w.Write(resp.Body()); err != nil {
+		logger.Error("Failed to write response", "error", err)
+		http.Error(w, "Failed to proxy response", http.StatusInternalServerError)
+	}
+
+}
+==================== ./internal/server/server.go ====================
+package server
+
+import (
+	"context"
+	"github.com/Kofandr/API_Proxy.2/config"
+	"github.com/Kofandr/API_Proxy.2/internal/client"
+	"github.com/Kofandr/API_Proxy.2/internal/handler"
+	"github.com/Kofandr/API_Proxy.2/internal/middleware"
+	"strconv"
+	"time"
+
+	"log/slog"
+	"net/http"
+)
+
+type Server struct {
+	Http   *http.Server
+	log    *slog.Logger
+	config *config.Configuration
+}
+
+func New(log *slog.Logger, cfg *config.Configuration) *Server {
+
+	restyClient := client.NewRestyClient()
+	handler := handler.New(restyClient, cfg)
+
+	mux := http.NewServeMux()
+
+	mux.Handle("/posts/", middleware.LoggerMiddleware(log, http.HandlerFunc(handler.Get)))
+
+	Http := &http.Server{
+		Addr:         (":" + strconv.Itoa(cfg.Port)),
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
+
+	return &Server{Http, log, cfg}
+
+}
+
+func (server *Server) Start() error {
+	server.log.Info("Starting server", "addr", server.Http.Addr)
+	return server.Http.ListenAndServe()
+}
+
+func (server *Server) Shutdown(ctx context.Context) error {
+	server.log.Info("Shutting down server")
+	return server.Http.Shutdown(ctx)
+}
+==================== ./internal/middleware/middleware.go ====================
+package middleware
+
+import (
+	"context"
+	"github.com/google/uuid"
+	"log/slog"
+	"net/http"
+	"time"
+)
+
+type CtxLoggerKey struct {
+}
+
+func LoggerMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		requestID := uuid.New().String()
+
+		requestLogger := logger.With("requestID", requestID)
+
+		ctx := context.WithValue(r.Context(), "requestID", requestID)
+		ctx = context.WithValue(ctx, CtxLoggerKey{}, requestLogger)
+		r = r.WithContext(ctx)
+
+		requestLogger.Info("Request started",
+			"method", r.Method,
+			"path", r.URL.Path,
+		)
+
+		rw := &responseWriter{ResponseWriter: w}
+
+		start := time.Now()
+		next.ServeHTTP(rw, r)
+
+		requestLogger.Info("Request completed",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.statusCode,
+			"duration", time.Since(start),
+		)
+	})
+}
+
+// responseWriter для перехвата статус-кода ответа
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+==================== ./internal/client/client.go ====================
+package client
+
+import (
+	"github.com/Kofandr/API_Proxy.2/internal/logger"
+	"github.com/go-resty/resty/v2"
+	"time"
+)
+
+func NewRestyClient() *resty.Client {
+	client := resty.New()
+
+	// решил чтото сам добавить чтобы по разбираться  типа в библиотеке
+
+	client.
+		SetRetryCount(3).
+		SetRetryWaitTime(2 * time.Second).
+		SetRetryMaxWaitTime(10 * time.Second)
+
+	client.OnAfterResponse(func(c *resty.Client, resp *resty.Response) error {
+		log := logger.MustLoggerFromCtx(resp.Request.Context())
+		log.Info("resty response completed",
+			"status", resp.StatusCode(),
+			"url", resp.Request.URL,
+			"duration", resp.Time())
+
+		return nil
+
+	})
+	return client
+}
+==================== ./config/config.go ====================
+package config
+
+import (
+	"errors"
+	"fmt"
+	"gopkg.in/yaml.v3"
+	"os"
+	"strconv"
+)
+
+type Configuration struct {
+	Port        int    `yaml:"port" env:"PORT"`
+	PathProxy   string `yaml:"pathProxy" env:"PATH_PROXY" envdefault:"https://jsonplaceholder.typicode.com/posts/"`
+	LoggerLevel string `yaml:"loggerLevel" env:"LOGGER_LEVEL"`
+}
+
+func Load(path string) (*Configuration, error) {
+	config := &Configuration{}
+
+	if path != "" {
+		configFile, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("error reading config file: %w", err)
+		}
+
+		if err := yaml.Unmarshal(configFile, config); err != nil {
+			return nil, fmt.Errorf("error parsing YAML: %w", err)
+		}
+	}
+
+	loadFromEnv(config)
+
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+func loadFromEnv(cfg *Configuration) {
+	if cfg.Port == 0 {
+		if envPort := os.Getenv("PORT"); envPort != "" {
+			if port, err := strconv.Atoi(envPort); err == nil {
+				cfg.Port = port
+			}
+		}
+	}
+
+	if cfg.PathProxy == "" {
+		if envProxy := os.Getenv("PATH_PROXY"); envProxy != "" {
+			cfg.PathProxy = envProxy
+		} else {
+			cfg.PathProxy = "https://jsonplaceholder.typicode.com/posts/"
+		}
+	}
+
+	if cfg.LoggerLevel == "" {
+		if envLogLevel := os.Getenv("LOGGER_LEVEL"); envLogLevel != "" {
+			cfg.LoggerLevel = envLogLevel
+		}
+	}
+}
+
+func (cfg *Configuration) Validate() error {
+	if cfg.Port <= 0 {
+		return errors.New("port must be positive")
+	}
+	if cfg.PathProxy == "" {
+		return errors.New("proxy path is required")
+	}
+	return nil
+}
+==================== ./cmd/myapp/main.go ====================
+package main
+
+import (
+	"context"
+	"github.com/Kofandr/API_Proxy.2/config"
+	"github.com/Kofandr/API_Proxy.2/internal/logger"
+	"github.com/Kofandr/API_Proxy.2/internal/server"
+	"github.com/joho/godotenv"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading Config.env file: %s", err)
+	}
+
+	pathConfig := os.Getenv("CONFIG_PATH")
+	cfg, err := config.Load(pathConfig)
+	if err != nil {
+		log.Fatalf("Config error: %s", err)
+	}
+
+	logger := logger.New(cfg.LoggerLevel)
+
+	mainServer := server.New(logger, cfg)
+
+	go func() {
+		if err := mainServer.Start(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server crash")
+
+		}
+	}()
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	<-signalChan
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	logger.Info("Shutting down...")
+	if err := mainServer.Shutdown(ctx); err != nil {
+		logger.Error("Shutdown failed", "error", err)
+	} else {
+		logger.Info("Server stopped")
+	}
+
+}

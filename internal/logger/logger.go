@@ -2,10 +2,12 @@ package logger
 
 import (
 	"context"
-	"github.com/Kofandr/API_Proxy.2/internal/middleware"
 	"log/slog"
 	"os"
 )
+
+type CtxLoggerKey struct {
+}
 
 func New(level string) *slog.Logger {
 	otps := &slog.HandlerOptions{}
@@ -26,7 +28,7 @@ func New(level string) *slog.Logger {
 }
 
 func MustLoggerFromCtx(ctx context.Context) *slog.Logger {
-	if logger, ok := ctx.Value(middleware.CtxLoggerKey{}).(*slog.Logger); ok {
+	if logger, ok := ctx.Value(CtxLoggerKey{}).(*slog.Logger); ok {
 		return logger
 	}
 	return slog.Default()

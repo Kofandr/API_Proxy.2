@@ -9,9 +9,9 @@ import (
 )
 
 type Configuration struct {
-	Port        int    `yaml:"port" env:"PORT"`
-	PathProxy   string `yaml:"pathProxy" env:"PATH_PROXY" envdefault:"https://jsonplaceholder.typicode.com/posts/"`
-	LoggerLevel string `yaml:"loggerLevel" env:"LOGGER_LEVEL"`
+	Port        int
+	PathProxy   string
+	LoggerLevel string
 }
 
 func Load(path string) (*Configuration, error) {
@@ -66,6 +66,9 @@ func (cfg *Configuration) Validate() error {
 	}
 	if cfg.PathProxy == "" {
 		return errors.New("proxy path is required")
+	}
+	if cfg.LoggerLevel != "INFO" && cfg.LoggerLevel != "DEBUG" && cfg.LoggerLevel != "WARN" && cfg.LoggerLevel != "ERROR" {
+		return errors.New("Invalid Level")
 	}
 	return nil
 }

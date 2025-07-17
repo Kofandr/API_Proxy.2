@@ -22,6 +22,7 @@ func New(client *resty.Client, cfg *config.Configuration) *Handler {
 
 func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	logger := logger.MustLoggerFromCtx(r.Context())
+	w.WriteHeader(http.StatusOK)
 
 	if r.Method != http.MethodGet {
 		logger.Info("Invalid method", "method", r.Method)
@@ -50,7 +51,7 @@ func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := w.Write(resp.Body()); err != nil {
 		logger.Error("Failed to write response", "error", err)
-		http.Error(w, "Failed to proxy response", http.StatusInternalServerError)
+		return
 	}
 
 }

@@ -13,6 +13,7 @@ func NewRestyClient() *resty.Client {
 
 	client.
 		SetRetryCount(3).
+		SetTimeout(5 * time.Second).
 		SetRetryWaitTime(2 * time.Second).
 		SetRetryMaxWaitTime(10 * time.Second)
 
