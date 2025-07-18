@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"context"
-	"github.com/Kofandr/API_Proxy.2/internal/logger"
 	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
 	"time"
 )
+
+type CtxLoggerKey struct {
+}
 
 func LoggerMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -16,8 +18,7 @@ func LoggerMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 
 		requestLogger := log.With("requestID", requestID)
 
-		ctx := context.WithValue(r.Context(), "requestID", requestID)
-		ctx = context.WithValue(ctx, logger.CtxLoggerKey{}, requestLogger)
+		ctx := context.WithValue(r.Context(), CtxLoggerKey{}, requestLogger)
 		r = r.WithContext(ctx)
 
 		requestLogger.Info("Request started",

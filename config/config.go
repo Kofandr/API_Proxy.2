@@ -9,9 +9,9 @@ import (
 )
 
 type Configuration struct {
-	Port        int
-	PathProxy   string
-	LoggerLevel string
+	Port        int    `yaml:"Port"`
+	PathProxy   string `yaml:"PathProxy"`
+	LoggerLevel string `yaml:"LoggerLevel"`
 }
 
 func Load(path string) (*Configuration, error) {

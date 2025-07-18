@@ -45,12 +45,12 @@ func (handler *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(key, value)
 		}
 	}
-
+	w.Header().Set("Content-Type", resp.Header().Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode())
 
 	if _, err := w.Write(resp.Body()); err != nil {
 		logger.Error("Failed to write response", "error", err)
-		return
+
 	}
 
 }
